@@ -1,0 +1,22 @@
+[
+    {
+        "start_time": 1758027111.0923939,
+        "end_time": 1758027134.650819,
+        "total_seconds": 23.558425188064575,
+        "active_seconds": 12,
+        "file_times": {
+            "ganondorf.psd": 6.037413835525513,
+            "palles.psd": 6.034843921661377
+        }
+    },
+    {
+        "start_time": 1758027164.6987016,
+        "end_time": 1758027209.440738,
+        "total_seconds": 44.74203634262085,
+        "active_seconds": 30,
+        "file_times": {
+            "palles.psd": 8.03077244758606,
+            "io.psd": 22.105762481689453
+        }
+    }
+]

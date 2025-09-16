@@ -21,9 +21,11 @@ ctk.set_default_color_theme("blue")
 
 class ModernPhotoshopTracker:
     OUTPUT_FILE = "photoshop_times.json"
+    SESSIONS_FILE = "sessions.json"
     SETTINGS_FILE = "settings.json"
     TAGS_FILE = "tags.json"
     POLL_INTERVAL = 2
+    SESSION_GAP_THRESHOLD = 30 * 60  # 30 minuti in secondi
 
     def __init__(self):
         self.root = ctk.CTk()
@@ -32,8 +34,12 @@ class ModernPhotoshopTracker:
         self.tracked_times = {}
         self.all_tags = set()
         self.tag_ref_count = defaultdict(int)
+        self.all_sessions = []
+        self.current_session = None
+
         self.current_file = None
         self.start_time = None
+        self.app_start_time = None
         self.running = True
 
         self.chart_canvas = None
@@ -50,6 +56,7 @@ class ModernPhotoshopTracker:
         self.date_picker_frame = None
         self.tag_filter_frame = None
         self.tag_filter_menu = None
+        self.session_scroll_frame = None
 
         self.settings = self._load_settings()
         self.translations = self._load_translations()
@@ -57,6 +64,7 @@ class ModernPhotoshopTracker:
         self._set_theme()
 
         self._load_data()
+        self._migrate_old_data_to_sessions()
         self._setup_ui()
         self._start_tracker()
 
@@ -67,11 +75,13 @@ class ModernPhotoshopTracker:
                 "tab_live": "Sessione Attiva",
                 "tab_chart": "Storico Grafico",
                 "tab_manage": "Gestione Dati",
+                "tab_sessions": "Sessioni",
                 "tab_settings": "Impostazioni",
                 "live_title": "Monitoraggio in Tempo Reale",
                 "live_file": "File attivo: {}",
                 "live_file_none": "File attivo: (nessuno)",
-                "live_time": "Tempo totale sul file: {}",
+                "live_time": "Tempo totale su file: {}",
+                "live_total_time": "Tempo totale sessione: {}",
                 "manage_title": "Gestione File Tracciati",
                 "manage_search": "Cerca:",
                 "manage_placeholder": "Nome file...",
@@ -106,18 +116,28 @@ class ModernPhotoshopTracker:
                 "tag_select_placeholder": "Seleziona un tag esistente",
                 "tag_add_selected_btn": "Aggiungi Selezionato",
                 "tags_label": "Tags:",
-                "no_tag_option": "Nessun tag"
+                "no_tag_option": "Nessun tag",
+                "sessions_title": "Storico Sessioni",
+                "session_label": "Sessione #{} - {}",
+                "session_active_time": "Tempo Attivo: {}",
+                "session_total_time": "Tempo Totale: {}",
+                "no_sessions": "Nessuna sessione trovata.",
+                "session_details_title": "Dettagli Sessione #{}",
+                "session_file_list_title": "File lavorati:",
+                "file_time_label": "{} - {}"
             },
             "en": {
                 "title": "Photoshop Time Tracker",
                 "tab_live": "Active Session",
                 "tab_chart": "Chart History",
                 "tab_manage": "Data Management",
+                "tab_sessions": "Sessions",
                 "tab_settings": "Settings",
                 "live_title": "Real-time Monitoring",
                 "live_file": "Active file: {}",
                 "live_file_none": "Active file: (none)",
                 "live_time": "Total time on file: {}",
+                "live_total_time": "Total session time: {}",
                 "manage_title": "Tracked Files Management",
                 "manage_search": "Search:",
                 "manage_placeholder": "File name...",
@@ -152,7 +172,15 @@ class ModernPhotoshopTracker:
                 "tag_select_placeholder": "Select an existing tag",
                 "tag_add_selected_btn": "Add Selected",
                 "tags_label": "Tags:",
-                "no_tag_option": "No tag"
+                "no_tag_option": "No tag",
+                "sessions_title": "Sessions History",
+                "session_label": "Session #{} - {}",
+                "session_active_time": "Active Time: {}",
+                "session_total_time": "Total Time: {}",
+                "no_sessions": "No sessions found.",
+                "session_details_title": "Session Details #{}",
+                "session_file_list_title": "Files worked on:",
+                "file_time_label": "{} - {}"
             }
         }
 
@@ -176,7 +204,6 @@ class ModernPhotoshopTracker:
 
     def _setup_ui(self):
         try:
-            # Crea un percorso assoluto per l'icona
             base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
             icon_path = os.path.join(base_path, 'Icona.ico')
             self.root.iconbitmap(icon_path)
@@ -195,11 +222,13 @@ class ModernPhotoshopTracker:
         self.tab_view.add(self.t["tab_live"])
         self.tab_view.add(self.t["tab_chart"])
         self.tab_view.add(self.t["tab_manage"])
+        self.tab_view.add(self.t["tab_sessions"])
         self.tab_view.add(self.t["tab_settings"])
 
         self.create_live_tab(self.tab_view.tab(self.t["tab_live"]))
         self.create_chart_tab(self.tab_view.tab(self.t["tab_chart"]))
         self.create_manage_tab(self.tab_view.tab(self.t["tab_manage"]))
+        self.create_sessions_tab(self.tab_view.tab(self.t["tab_sessions"]))
         self.create_settings_tab(self.tab_view.tab(self.t["tab_settings"]))
 
         self.tab_view.configure(command=self._on_tab_change)
@@ -209,12 +238,14 @@ class ModernPhotoshopTracker:
         self._load_settings()
         self._load_times()
         self._load_tags()
+        self._load_sessions()
 
     def _start_tracker(self):
         threading.Thread(target=self._tracker_loop, daemon=True).start()
         self.update_gui()
         self.refresh_management_list()
         self.update_chart()
+        self.refresh_session_list()
 
     def _on_tab_change(self):
         active_tab = self.tab_view.get()
@@ -222,6 +253,8 @@ class ModernPhotoshopTracker:
             self.update_chart()
         elif active_tab == self.t["tab_manage"]:
             self.refresh_management_list()
+        elif active_tab == self.t["tab_sessions"]:
+            self.refresh_session_list()
         self.update_widget_colors()
 
     def create_live_tab(self, tab):
@@ -233,6 +266,9 @@ class ModernPhotoshopTracker:
         self.label_file.pack(pady=10)
         self.label_time = ctk.CTkLabel(frame, text=self.t["live_time"].format("0:00:00"), font=self.main_font)
         self.label_time.pack(pady=5)
+        self.label_total_time = ctk.CTkLabel(frame, text=self.t["live_total_time"].format("0:00:00"),
+                                             font=self.main_font)
+        self.label_total_time.pack(pady=5)
 
     def create_chart_tab(self, tab):
         frame = ctk.CTkFrame(tab, fg_color="transparent")
@@ -302,6 +338,12 @@ class ModernPhotoshopTracker:
                                                                                                     expand=True,
                                                                                                     fill="x",
                                                                                                     padx=(5, 0))
+
+    def create_sessions_tab(self, tab):
+        self.sessions_title = ctk.CTkLabel(tab, text=self.t["sessions_title"], font=self.title_font)
+        self.sessions_title.pack(pady=(10, 5))
+        self.session_scroll_frame = ctk.CTkScrollableFrame(tab, fg_color="transparent")
+        self.session_scroll_frame.pack(expand=True, fill="both", padx=10, pady=5)
 
     def create_settings_tab(self, tab):
         ctk.CTkLabel(tab, text=self.t["tab_settings"], font=self.title_font).pack(pady=(10, 20))
@@ -390,12 +432,74 @@ class ModernPhotoshopTracker:
             except (json.JSONDecodeError, FileNotFoundError):
                 self.all_tags = set()
 
+    def _load_sessions(self):
+        if os.path.exists(self.SESSIONS_FILE):
+            try:
+                with open(self.SESSIONS_FILE, "r", encoding="utf-8") as f:
+                    self.all_sessions = json.load(f)
+            except (json.JSONDecodeError, FileNotFoundError):
+                self.all_sessions = []
+
+    def _migrate_old_data_to_sessions(self):
+        if self.all_sessions:
+            print("Sessioni esistenti trovate. Migrazione non necessaria.")
+            return
+
+        if not self.tracked_times:
+            print("Nessun dato vecchio da migrare.")
+            return
+
+        print("Avvio migrazione dei dati vecchi in sessioni...")
+
+        # Ordina i file in base alla data di ultima modifica
+        sorted_files = sorted(self.tracked_times.items(), key=lambda item: item[1]['last_modified'])
+
+        current_session = None
+        for filename, data in sorted_files:
+            file_start_time = data.get('start_time', data['last_modified'] - data['total_seconds'])
+            file_end_time = data['last_modified']
+
+            if current_session is None:
+                # Inizia la prima sessione
+                current_session = {
+                    "start_time": file_start_time,
+                    "end_time": file_end_time,
+                    "active_seconds": data['total_seconds'],
+                    "file_times": {filename: data['total_seconds']}
+                }
+            else:
+                # Se il gap tra le sessioni è troppo grande, inizia una nuova sessione
+                if file_start_time - current_session["end_time"] > self.SESSION_GAP_THRESHOLD:
+                    current_session["total_seconds"] = current_session["end_time"] - current_session["start_time"]
+                    self.all_sessions.append(current_session)
+                    current_session = {
+                        "start_time": file_start_time,
+                        "end_time": file_end_time,
+                        "active_seconds": data['total_seconds'],
+                        "file_times": {filename: data['total_seconds']}
+                    }
+                else:
+                    # Continua la sessione corrente
+                    current_session["end_time"] = file_end_time
+                    current_session["active_seconds"] += data['total_seconds']
+                    current_session["file_times"][filename] = data['total_seconds']
+
+        # Salva l'ultima sessione
+        if current_session:
+            current_session["total_seconds"] = current_session["end_time"] - current_session["start_time"]
+            self.all_sessions.append(current_session)
+
+        print(f"Migrazione completata. Create {len(self.all_sessions)} sessioni.")
+        self._save_all_data()
+
     def _save_all_data(self):
         self._prune_tags()
         with open(self.OUTPUT_FILE, "w", encoding="utf-8") as f:
             json.dump(self.tracked_times, f, indent=4, sort_keys=True)
         with open(self.TAGS_FILE, "w", encoding="utf-8") as f:
             json.dump(list(self.all_tags), f, indent=4)
+        with open(self.SESSIONS_FILE, "w", encoding="utf-8") as f:
+            json.dump(self.all_sessions, f, indent=4)
 
     def _prune_tags(self):
         tags_to_remove = [tag for tag, count in self.tag_ref_count.items() if count <= 0]
@@ -490,6 +594,52 @@ class ModernPhotoshopTracker:
 
         self.total_label.configure(text=self.t["total_label"].format(self.format_time(total_seconds)))
 
+    def refresh_session_list(self):
+        for widget in self.session_scroll_frame.winfo_children():
+            widget.destroy()
+
+        if not self.all_sessions:
+            ctk.CTkLabel(self.session_scroll_frame, text=self.t["no_sessions"], font=self.main_font).pack(pady=20)
+            return
+
+        for i, session in enumerate(self.all_sessions):
+            session_frame = ctk.CTkFrame(self.session_scroll_frame, corner_radius=10)
+            session_frame.pack(fill="x", padx=10, pady=5)
+            session_frame.bind("<Button-1>", lambda e, s=session, idx=i: self.show_session_details(s, idx + 1))
+
+            start_date_str = datetime.fromtimestamp(session["start_time"]).strftime("%d/%m/%Y")
+            session_label_text = self.t["session_label"].format(i + 1, start_date_str)
+
+            label = ctk.CTkLabel(session_frame, text=session_label_text, font=self.main_font)
+            label.pack(side="left", padx=10, pady=5)
+            label.bind("<Button-1>", lambda e, s=session, idx=i: self.show_session_details(s, idx + 1))
+
+            active_time_text = self.t["session_active_time"].format(self.format_time(session["active_seconds"]))
+            active_time_label = ctk.CTkLabel(session_frame, text=active_time_text, font=self.main_font)
+            active_time_label.pack(side="right", padx=10, pady=5)
+            active_time_label.bind("<Button-1>", lambda e, s=session, idx=i: self.show_session_details(s, idx + 1))
+
+            total_time_text = self.t["session_total_time"].format(self.format_time(session["total_seconds"]))
+            total_time_label = ctk.CTkLabel(session_frame, text=total_time_text, font=self.main_font)
+            total_time_label.pack(side="right", padx=10, pady=5)
+            total_time_label.bind("<Button-1>", lambda e, s=session, idx=i: self.show_session_details(s, idx + 1))
+
+    def show_session_details(self, session, session_number):
+        details_window = ctk.CTkToplevel(self.root)
+        details_window.title(self.t["session_details_title"].format(session_number))
+        details_window.geometry("500x400")
+        details_window.grab_set()
+
+        ctk.CTkLabel(details_window, text=self.t["session_file_list_title"], font=self.title_font).pack(pady=10)
+
+        file_scroll_frame = ctk.CTkScrollableFrame(details_window)
+        file_scroll_frame.pack(fill="both", expand=True, padx=10, pady=5)
+
+        for filename, seconds in session["file_times"].items():
+            file_label_text = self.t["file_time_label"].format(filename, self.format_time(seconds))
+            ctk.CTkLabel(file_scroll_frame, text=file_label_text, font=self.main_font, anchor="w").pack(fill="x",
+                                                                                                        padx=10, pady=2)
+
     def update_chart(self):
         files = self._get_filtered_and_sorted_files()
         self.chart_axes.clear()
@@ -535,28 +685,62 @@ class ModernPhotoshopTracker:
             active_file = self.get_active_photoshop_file()
             if active_file != self.current_file:
                 self._handle_file_change(active_file)
+
+            # Aggiorna il tempo attivo della sessione
+            if self.app_start_time and active_file:
+                self.current_session["active_seconds"] += self.POLL_INTERVAL
+
             time.sleep(self.POLL_INTERVAL)
-        self._save_current_file_time()
-        self._save_all_data()
 
     def _handle_file_change(self, new_file):
         self._save_current_file_time()
+
+        # Inizia una nuova sessione se non è ancora iniziata
+        if self.app_start_time is None and new_file:
+            self.app_start_time = time.time()
+            self.current_session = {
+                "start_time": self.app_start_time,
+                "end_time": None,
+                "total_seconds": 0,
+                "active_seconds": 0,
+                "file_times": {}
+            }
+
+        if self.current_session:
+            # Aggiorna il tempo totale della sessione
+            self.current_session["total_seconds"] = time.time() - self.current_session["start_time"]
+
         self.current_file = new_file
+
         if new_file:
             if new_file not in self.tracked_times:
                 self.tracked_times[new_file] = {"total_seconds": 0, "last_modified": time.time(),
                                                 "start_time": time.time(), "tags": []}
+            if new_file not in self.current_session["file_times"]:
+                self.current_session["file_times"][new_file] = 0
             self.start_time = time.time()
         else:
             self.start_time = None
-        self._save_all_data()
 
     def _save_current_file_time(self):
         if self.current_file and self.start_time:
             elapsed = time.time() - self.start_time
             self.tracked_times[self.current_file]["total_seconds"] += elapsed
             self.tracked_times[self.current_file]["last_modified"] = time.time()
+
+            if self.current_session:
+                self.current_session["file_times"][self.current_file] += elapsed
+
             self.start_time = None
+
+    def _save_current_session_data(self):
+        if self.current_session:
+            self.current_session["end_time"] = time.time()
+            self.current_session["total_seconds"] = self.current_session["end_time"] - self.current_session[
+                "start_time"]
+            self.all_sessions.append(self.current_session)
+            self.current_session = None
+            self.app_start_time = None
 
     def delete_file(self, filename_to_delete):
         if messagebox.askyesno(self.t["confirm_delete_title"], self.t["confirm_delete_msg"].format(filename_to_delete)):
@@ -692,10 +876,21 @@ class ModernPhotoshopTracker:
         else:
             self.label_file.configure(text=self.t["live_file_none"])
             self.label_time.configure(text=self.t["live_time"].format("0:00:00"))
+
+        if self.current_session:
+            total_session_seconds = time.time() - self.current_session["start_time"]
+            self.label_total_time.configure(
+                text=self.t["live_total_time"].format(self.format_time(total_session_seconds)))
+        else:
+            self.label_total_time.configure(text=self.t["live_total_time"].format("0:00:00"))
+
         self.root.after(1000, self.update_gui)
 
     def stop(self):
         self.running = False
+        self._save_current_file_time()
+        self._save_current_session_data()
+        self._save_all_data()
         self.root.after(100, self.root.destroy)
 
 

@@ -1,1 +1,26 @@
-{}
+{
+    "bananza.psd": {
+        "last_modified": 1758026540.923601,
+        "start_time": 1758026528.767565,
+        "tags": [],
+        "total_seconds": 12.156035900115967
+    },
+    "ganondorf.psd": {
+        "last_modified": 1758027117.1298077,
+        "start_time": 1758027111.0923939,
+        "tags": [],
+        "total_seconds": 6.037413835525513
+    },
+    "io.psd": {
+        "last_modified": 1758027198.8501256,
+        "start_time": 1758027174.743592,
+        "tags": [],
+        "total_seconds": 22.105762481689453
+    },
+    "palles.psd": {
+        "last_modified": 1758027174.743592,
+        "start_time": 1758027117.1298077,
+        "tags": [],
+        "total_seconds": 14.065616369247437
+    }
+}
